@@ -91,14 +91,5 @@ schema.sql           run once to set up tables
 
 ## Known limitations (MVP scope)
 
-- **Drive folder listing is non-recursive.** Subfolders won't be picked up
-  automatically (see note in `drive_ingest.py`).
-- **Project name matching is fuzzy, not guaranteed.** Check console output
-  from `run_ingest.py` for `[normalize]` lines showing what got merged.
-- **Gap analysis uses a fixed 8-category checklist** (Business purpose,
-  Architecture, Deployment steps, Dependencies, Contacts, Known issues,
-  Maintenance procedures, Future roadmap). It won't catch gaps outside
-  this list. An embedding-clustering approach could be added later as a
-  complementary check (see note at the bottom of `gap_analysis.py`).
-- **No authentication/access control** on the Streamlit app — fine for a
-  local demo, not meant for a shared/public deployment as-is.
+- Subfolders aren't considered.
+- Only runs locally for now. 
