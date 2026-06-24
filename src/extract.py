@@ -1,4 +1,3 @@
-TESTINGGGGG
 """
 Step 2: Structured knowledge extraction.
 
