@@ -1,5 +1,5 @@
 """
-Chunking + embedding generation via OpenAI.
+Chunking + embedding generation via the U-M GPT Toolkit gateway (OpenAI-compatible).
 
 Chunking strategy: split on heading-like boundaries first (Markdown #/##, or
 blank-line-separated paragraphs as a fallback), then pack greedily up to
@@ -21,15 +21,20 @@ _client = None
 
 
 def get_client() -> OpenAI:
-    """Lazily construct the OpenAI client so this module can be imported
-    (e.g. for testing chunk_document()) without OPENAI_API_KEY set."""
+    """Lazily construct the OpenAI-compatible client, pointed at the U-M GPT
+    Toolkit gateway, so this module can be imported (e.g. for testing
+    chunk_document()) without UMGPT_API_KEY set."""
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        _client = OpenAI(
+            api_key=os.environ["UMGPT_API_KEY"],
+            base_url=os.environ.get("UMGPT_API_BASE", "https://api.toolkit.umgpt.umich.edu/v1"),
+        )
     return _client
 
 
-EMBEDDING_MODEL = "text-embedding-3-small"  # 1536 dims, matches schema.sql
+EMBEDDING_MODEL = "text-embedding-3-small"  # 1536 dims, matches schema.sql -- confirmed
+                                             # embeddings-capable in the UMGPT Toolkit model matrix
 MAX_TOKENS_PER_CHUNK = 500
 ENCODING = tiktoken.get_encoding("cl100k_base")
 

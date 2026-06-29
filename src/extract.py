@@ -21,11 +21,14 @@ _client = None
 def get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        _client = OpenAI(
+            api_key=os.environ["UMGPT_API_KEY"],
+            base_url=os.environ.get("UMGPT_API_BASE", "https://api.toolkit.umgpt.umich.edu/v1"),
+        )
     return _client
 
 
-EXTRACTION_MODEL = "gpt-4o-mini"  # cheap + good enough for structured extraction
+EXTRACTION_MODEL = "gpt-4o-mini"  # cheap, fast, confirmed chat-completions-capable in the UMGPT model matrix
 
 EXTRACTION_SYSTEM_PROMPT = """You are an IT knowledge transfer specialist reviewing internal \
 documentation as part of an employee offboarding process. Extract structured information from \
