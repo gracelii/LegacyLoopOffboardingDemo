@@ -8,15 +8,18 @@ Run this after run_ingest.py has populated structured_knowledge for the
 relevant documents (i.e. after their "project" field has been extracted).
 """
 import sys
+import logging
 
 from src.db import get_connection
-from src.gap_analysis import analyze_gaps, missing_and_thin_categories
+from src.gap_analysis import analyze_gaps, missing_and_thin_categories, STANDARD_CATEGORIES
 from src.questions import generate_questions
 from src.db_writer import (
     get_documents_for_project,
     upsert_gap_analysis,
     insert_interview_questions,
 )
+
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
 def main():
@@ -42,6 +45,18 @@ def main():
 
     print("\nRunning gap analysis...")
     gap_result = analyze_gaps(project, combined_text)
+
+    # If the API failed, analyze_gaps returns a safe fallback (all missing).
+    # Detect this and warn clearly rather than silently storing misleading data.
+    all_missing = all(v == "missing" for v in gap_result.values())
+    if all_missing and len(gap_result) == len(STANDARD_CATEGORIES):
+        print(
+            "\n⚠️  Warning: gap analysis returned all-missing — this may indicate "
+            "an API error (timeout or quota issue) rather than a genuine result. "
+            "Check the logs above. Proceeding with question generation, but results "
+            "may not reflect the actual document content."
+        )
+
     upsert_gap_analysis(conn, project, gap_result, doc_ids)
 
     print("\nCoverage:")
@@ -56,7 +71,14 @@ def main():
         return
 
     print(f"\nGenerating interview questions for {len(gaps)} categories...")
-    questions = generate_questions(project, gaps)
+    try:
+        questions = generate_questions(project, gaps)
+    except Exception as e:
+        print(f"\n⚠️  Question generation failed: {e}")
+        print("Gap analysis results were saved. Re-run this script to retry question generation.")
+        conn.close()
+        sys.exit(1)
+
     insert_interview_questions(conn, project, questions)
 
     print("\nGenerated questions:")

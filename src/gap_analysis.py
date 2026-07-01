@@ -1,102 +1,95 @@
 """
-Step 3: Gap analysis.
+Run Steps 3-4: gap analysis + interview question generation, for one project.
 
-For a given project, looks at all the structured-knowledge extractions
-belonging to that project's documents and asks: which of the standard
-knowledge-transfer categories are covered, missing, or thin?
+Usage:
+    python run_gap_analysis.py "API Hub Search"
 
-This is intentionally simpler than embedding-clustering -- it asks the LLM
-directly, against a fixed checklist, which is faster to build and easier to
-explain in a demo. The fixed category list is also the main limitation:
-it won't catch gaps outside this list. See note at bottom for how to extend.
+Run this after run_ingest.py has populated structured_knowledge for the
+relevant documents (i.e. after their "project" field has been extracted).
 """
-import json
-import os
-from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential
+import sys
+import logging
 
-from src.extract import get_client, EXTRACTION_MODEL
+from src.db import get_connection
+from src.gap_analysis import analyze_gaps, missing_and_thin_categories, STANDARD_CATEGORIES
+from src.questions import generate_questions
+from src.db_writer import (
+    get_documents_for_project,
+    upsert_gap_analysis,
+    insert_interview_questions,
+)
 
-load_dotenv()
-
-STANDARD_CATEGORIES = [
-    "Business purpose",
-    "Architecture",
-    "Deployment steps",
-    "Dependencies",
-    "Contacts",
-    "Known issues",
-    "Maintenance procedures",
-    "Future roadmap",
-]
-
-GAP_ANALYSIS_SYSTEM_PROMPT = """You are an IT knowledge transfer specialist. You will be given \
-combined documentation for a single project (it may be multiple documents concatenated). \
-Determine, for each of the following categories, whether the documentation covers it.
-
-Categories:
-{categories}
-
-For each category, return one of:
-- "present": the category is clearly and substantively covered
-- "thin": the category is mentioned but with minimal detail (a sentence or less)
-- "missing": the category is not addressed at all
-
-Return ONLY valid JSON in this exact shape, no preamble, no markdown fences:
-{{
-  "Business purpose": "present" | "thin" | "missing",
-  "Architecture": "present" | "thin" | "missing",
-  "Deployment steps": "present" | "thin" | "missing",
-  "Dependencies": "present" | "thin" | "missing",
-  "Contacts": "present" | "thin" | "missing",
-  "Known issues": "present" | "thin" | "missing",
-  "Maintenance procedures": "present" | "thin" | "missing",
-  "Future roadmap": "present" | "thin" | "missing"
-}}
-"""
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
-@retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=20))
-def analyze_gaps(project_name: str, combined_text: str) -> dict:
-    """
-    Returns a dict mapping each STANDARD_CATEGORIES entry to 'present' | 'thin' | 'missing'.
-    combined_text should be the concatenation of raw_text from all docs tagged
-    with this project (truncate before calling if the corpus is very large).
-    """
-    prompt = GAP_ANALYSIS_SYSTEM_PROMPT.format(categories="\n".join(f"- {c}" for c in STANDARD_CATEGORIES))
+def main():
+    if len(sys.argv) < 2:
+        print('Usage: python run_gap_analysis.py "Project Name"')
+        sys.exit(1)
 
-    response = get_client().chat.completions.create(
-        model=EXTRACTION_MODEL,
-        messages=[
-            {"role": "system", "content": prompt},
-            {
-                "role": "user",
-                "content": f"Project: {project_name}\n\nDocumentation:\n{combined_text[:20000]}",
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
+    project = sys.argv[1]
+    conn = get_connection()
 
-    result = json.loads(response.choices[0].message.content)
+    docs = get_documents_for_project(conn, project)
+    if not docs:
+        print(f"No documents found tagged with project '{project}'.")
+        print("Check that run_ingest.py has run and extracted a matching project name.")
+        sys.exit(1)
 
-    # Defensive normalization in case the model omits a category or uses unexpected casing
-    normalized = {}
-    for cat in STANDARD_CATEGORIES:
-        val = result.get(cat, "missing")
-        normalized[cat] = val if val in ("present", "thin", "missing") else "missing"
+    print(f"Found {len(docs)} documents for project '{project}':")
+    for d in docs:
+        print(f"  - {d['title']}")
 
-    return normalized
+    combined_text = "\n\n---\n\n".join(d["raw_text"] for d in docs)
+    doc_ids = [d["doc_id"] for d in docs]
+
+    print("\nRunning gap analysis...")
+    gap_result = analyze_gaps(project, combined_text)
+
+    # If the API failed, analyze_gaps returns a safe fallback (all missing).
+    # Detect this and warn clearly rather than silently storing misleading data.
+    all_missing = all(v == "missing" for v in gap_result.values())
+    if all_missing and len(gap_result) == len(STANDARD_CATEGORIES):
+        print(
+            "\n⚠️  Warning: gap analysis returned all-missing — this may indicate "
+            "an API error (timeout or quota issue) rather than a genuine result. "
+            "Check the logs above. Proceeding with question generation, but results "
+            "may not reflect the actual document content."
+        )
+
+    upsert_gap_analysis(conn, project, gap_result, doc_ids)
+
+    print("\nCoverage:")
+    for category, status in gap_result.items():
+        marker = {"present": "[OK]   ", "thin": "[THIN] ", "missing": "[GAP]  "}[status]
+        print(f"  {marker}{category}")
+
+    gaps = missing_and_thin_categories(gap_result)
+    if not gaps:
+        print("\nNo gaps found -- nothing to generate questions for.")
+        conn.close()
+        return
+
+    print(f"\nGenerating interview questions for {len(gaps)} categories...")
+    try:
+        questions = generate_questions(project, gaps)
+    except Exception as e:
+        print(f"\n⚠️  Question generation failed: {e}")
+        print("Gap analysis results were saved. Re-run this script to retry question generation.")
+        conn.close()
+        sys.exit(1)
+
+    insert_interview_questions(conn, project, questions)
+
+    print("\nGenerated questions:")
+    for category, qs in questions.items():
+        print(f"\n  {category}:")
+        for q in qs:
+            print(f"    - {q}")
+
+    conn.close()
+    print(f"\nDone. Run the Streamlit app to conduct the interview for '{project}'.")
 
 
-def missing_and_thin_categories(gap_result: dict) -> list[str]:
-    """Convenience helper: returns categories that are 'missing' or 'thin', in checklist order."""
-    return [cat for cat in STANDARD_CATEGORIES if gap_result.get(cat) in ("missing", "thin")]
-
-
-# --- Note on extending this later ---
-# If the fixed checklist above turns out to be too rigid (e.g. it misses something
-# specific to a niche system), the clustering approach from the earlier pipeline
-# design can slot in here as a complementary check: cluster chunk embeddings,
-# diff against an expected-topic list, and merge any *additional* gaps it finds
-# into this same gap_analysis table. Nothing here needs to be torn out to add that.
+if __name__ == "__main__":
+    main()
