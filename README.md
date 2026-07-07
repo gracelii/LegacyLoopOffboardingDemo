@@ -92,4 +92,5 @@ schema.sql           run once to set up tables
 ## Known limitations (MVP scope)
 
 - Subfolders aren't considered.
-- Only runs locally for now. 
+- Only runs locally for now.
+- Downloads from streamlit as a .txt (pulling directly into drive encounters service quota limitations) 
