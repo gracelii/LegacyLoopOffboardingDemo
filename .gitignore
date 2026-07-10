@@ -1,7 +1,18 @@
+# Environment variables -- never commit real credentials
 .env
+
+# Google service account key -- contains private key, must never be committed
+service_account.json
+
+# Legacy OAuth files (no longer used, but block just in case)
 client_secret.json
 token.json
+
+# Python
 venv/
 __pycache__/
 *.pyc
+*.pyo
+
+# macOS
 .DS_Store

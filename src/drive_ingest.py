@@ -1,32 +1,36 @@
 """
-Google Drive ingestion.
+Google Drive ingestion — service account auth.
 
-First run will open a browser window for OAuth consent (Desktop app flow).
-After that, the token is cached in GOOGLE_TOKEN_FILE and reused silently.
+Uses a service account JSON key file instead of the OAuth Desktop app flow.
+This means no browser popup, no cached token file, and no per-user login —
+the service account is a machine identity that authenticates silently using
+its JSON key.
 
-Setup required before running:
-1. Go to https://console.cloud.google.com/apis/credentials
-2. Create a project (or use an existing one), enable the "Google Drive API"
-3. Create OAuth client credentials of type "Desktop app"
-4. Download the JSON, save it as the path set in GOOGLE_CLIENT_SECRET_FILE
+SETUP REQUIRED:
+1. Create a service account in Google Cloud Console (IAM & Admin → Service Accounts)
+2. Download its JSON key, save as service_account.json in the project root
+3. Share the Drive input folder with the service account's email address
+   (found on the service account details page), with Viewer access
+4. Share the Drive output folder with the same email, with Editor access
+5. Set GOOGLE_SERVICE_ACCOUNT_FILE, DRIVE_FOLDER_ID, and DRIVE_OUTPUT_FOLDER_ID in .env
 """
 import io
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from pypdf import PdfReader
 
 load_dotenv()
 
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+# Read-only scope is sufficient for ingestion.
+# The export module (drive_export.py) uses a separate client with write scope.
+SCOPES_READ = ["https://www.googleapis.com/auth/drive.readonly"]
 
-# Native Google formats need to be *exported* to a readable mimetype.
-# Binary formats (PDF, etc.) get downloaded as-is and parsed locally.
+# Google native formats get exported to a readable mimetype.
 GOOGLE_EXPORT_MAP = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.presentation": "text/plain",
@@ -41,28 +45,25 @@ SUPPORTED_BINARY_MIMETYPES = {
 
 
 def get_drive_service():
-    """Authenticate (interactively on first run) and return a Drive API client."""
-    creds = None
-    token_file = os.environ["GOOGLE_TOKEN_FILE"]
-    secret_file = os.environ["GOOGLE_CLIENT_SECRET_FILE"]
-
-    if os.path.exists(token_file):
-        creds = Credentials.from_authorized_user_file(token_file, SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(secret_file, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(token_file, "w") as f:
-            f.write(creds.to_json())
-
+    """
+    Build and return a Drive API client authenticated as the service account.
+    Silent — no browser, no token cache, no user interaction required.
+    """
+    service_account_file = os.environ.get(
+        "GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json"
+    )
+    creds = service_account.Credentials.from_service_account_file(
+        service_account_file, scopes=SCOPES_READ
+    )
     return build("drive", "v3", credentials=creds)
 
 
-def list_files_in_folder(service, folder_id: str):
-    """List all files in a Drive folder (non-recursive; see note below for subfolders)."""
+def list_files_in_folder(service, folder_id: str) -> list[dict]:
+    """
+    List all files directly inside a Drive folder.
+    Non-recursive — subfolders won't be traversed automatically.
+    See the comment at the bottom of fetch_documents() for how to add recursion.
+    """
     files = []
     page_token = None
     query = f"'{folder_id}' in parents and trashed = false"
@@ -85,11 +86,6 @@ def list_files_in_folder(service, folder_id: str):
 
     return files
 
-    # NOTE: this only lists files directly inside folder_id. If the corpus has
-    # subfolders (e.g. Confluence-style nested spaces exported to Drive), you'll
-    # want to recurse: for each file with mimeType
-    # 'application/vnd.google-apps.folder', call this function again with its id.
-
 
 def _download_binary(service, file_id: str) -> bytes:
     request = service.files().get_media(fileId=file_id)
@@ -111,10 +107,10 @@ def _export_google_native(service, file_id: str, export_mime: str) -> bytes:
     return buf.getvalue()
 
 
-from typing import Optional
 def extract_text(service, file_meta: dict) -> Optional[str]:
     """
     Return plain text for a Drive file, or None if the type isn't handled yet.
+    Supported: Google Docs/Slides/Sheets (native), PDF, plain text, Markdown.
     """
     mime_type = file_meta["mimeType"]
     file_id = file_meta["id"]
@@ -132,7 +128,6 @@ def extract_text(service, file_meta: dict) -> Optional[str]:
         raw = _download_binary(service, file_id)
         return raw.decode("utf-8", errors="replace")
 
-    # Unhandled type (images, video, zip, etc.) -- skip for now.
     return None
 
 
@@ -146,6 +141,10 @@ def fetch_documents(folder_id: str) -> list[dict]:
 
     documents = []
     for f in files:
+        # Skip subfolders — only process actual files
+        if f["mimeType"] == "application/vnd.google-apps.folder":
+            continue
+
         text = extract_text(service, f)
         if not text or not text.strip():
             print(f"  [skip] {f['name']} ({f['mimeType']}) -- no extractable text")
@@ -168,3 +167,10 @@ def fetch_documents(folder_id: str) -> list[dict]:
         print(f"  [ok]   {f['name']} -- {len(text)} chars extracted")
 
     return documents
+
+    # NOTE: to add subfolder recursion, add this after the loop above:
+    # for f in files:
+    #     if f["mimeType"] == "application/vnd.google-apps.folder":
+    #         documents.extend(fetch_documents_from_folder(service, f["id"]))
+    # Then extract fetch_documents_from_folder() as a helper that takes a
+    # service object rather than creating a new one each call.
