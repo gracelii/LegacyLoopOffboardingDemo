@@ -22,12 +22,10 @@ from src.db_writer import (
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print('Usage: python run_gap_analysis.py "Project Name"')
-        sys.exit(1)
+def analyze_project(project):
+    if not project:
+        raise ValueError("Project name is required.")
 
-    project = sys.argv[1]
     conn = get_connection()
 
     docs = get_documents_for_project(conn, project)
@@ -91,5 +89,7 @@ def main():
     print(f"\nDone. Run the Streamlit app to conduct the interview for '{project}'.")
 
 
+
+
 if __name__ == "__main__":
-    main()
+    analyze_project(sys.argv[1])

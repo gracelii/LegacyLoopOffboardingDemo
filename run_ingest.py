@@ -26,11 +26,13 @@ from src.db_writer import (
 load_dotenv()
 
 
-def main():
-    folder_id = os.environ.get("DRIVE_FOLDER_ID")
+def ingest(folder_id: str | None = None):
+    # If no folder was provided, fall back to the .env value
+    if folder_id is None:
+        folder_id = os.environ.get("DRIVE_FOLDER_ID")
+
     if not folder_id:
-        print("ERROR: set DRIVE_FOLDER_ID in .env to the Drive folder you want to ingest.")
-        sys.exit(1)
+        raise ValueError("No Google Drive folder ID was provided.")
 
     print(f"Fetching documents from Drive folder {folder_id} ...")
     documents = fetch_documents(folder_id)
@@ -38,12 +40,16 @@ def main():
 
     if not documents:
         print("Nothing to ingest. Done.")
-        return
+        return {
+            "filesProcessed": 0,
+            "chunksEmbedded": 0,
+        }
 
     conn = get_connection()
     known_projects = get_all_projects(conn)  # fetched once; updated locally as new projects appear
 
     total_chunks = 0
+    detected_project = None
     for doc in documents:
         print(f"Processing: {doc['title']}")
 
@@ -69,14 +75,27 @@ def main():
 
         upsert_structured_knowledge(conn, doc_id, extracted)
         project_label = extracted.get("project") or "(none detected)"
+
+        if extracted.get("project") and detected_project is None:
+            detected_project = extracted["project"]
+
         print(f"  -> project: {project_label}")
 
         total_chunks += len(chunks)
         print(f"  -> {len(chunks)} chunks embedded and stored")
 
     conn.close()
+
     print(f"\nDone. {len(documents)} documents, {total_chunks} chunks total.")
+
+    return {
+        "filesProcessed": len(documents),
+        "chunksEmbedded": total_chunks,
+        "messagesIndexed": 0,
+        "ticketsIndexed": 0,
+        "project": detected_project,
+    }
 
 
 if __name__ == "__main__":
-    main()
+    ingest()

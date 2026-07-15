@@ -137,6 +137,38 @@ def insert_interview_questions(conn, project: str, questions_by_category: dict[s
     conn.commit()
 
 
+def get_interview_questions(conn, project: str):
+    """Return all interview questions for a project."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                question_id,
+                category,
+                question_text,
+                answer_text,
+                created_at
+            FROM interview_questions
+            WHERE project = %s
+            ORDER BY created_at;
+            """,
+            (project,),
+        )
+
+        rows = cur.fetchall()
+
+    return [
+        {
+            "question_id": str(row[0]),
+            "category": row[1],
+            "question_text": row[2],
+            "answer_text": row[3],
+            "created_at": row[4],
+        }
+        for row in rows
+    ]
+
+
 def record_answer(conn, question_id: str, answer_text: str):
     """Store an interview answer (Step 5)."""
     with conn.cursor() as cur:
@@ -190,3 +222,5 @@ def get_all_projects(conn) -> list[str]:
             "SELECT DISTINCT project FROM structured_knowledge WHERE project IS NOT NULL ORDER BY project;"
         )
         return [r[0] for r in cur.fetchall()]
+    
+
