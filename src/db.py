@@ -1,8 +1,9 @@
 """
-Thin Postgres/pgvector connection helper.
+Postgres/pgvector connection helper.
 
-Swap point: if you migrate to ChromaDB later, this module (plus db_writer.py)
-is the only thing that needs replacing -- ingestion and embedding logic stay the same.
+Supports two modes:
+1. Streamlit deployment: reads connection params from st.secrets
+2. Local development: reads from .env via os.environ
 """
 import os
 import psycopg2
@@ -13,14 +14,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_config(key: str, default: str = "") -> str:
+    """Read a config value from Streamlit secrets if available, else os.environ."""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
+
 def get_connection():
     """Open a new Postgres connection with pgvector + UUID support registered."""
     conn = psycopg2.connect(
-        host=os.environ.get("PG_HOST", "localhost"),
-        port=os.environ.get("PG_PORT", "5432"),
-        dbname=os.environ.get("PG_DB", "offboarding"),
-        user=os.environ.get("PG_USER", "postgres"),
-        password=os.environ.get("PG_PASSWORD", ""),
+        host=_get_config("PG_HOST", "localhost"),
+        port=_get_config("PG_PORT", "5432"),
+        dbname=_get_config("PG_DB", "offboarding"),
+        user=_get_config("PG_USER", "postgres"),
+        password=_get_config("PG_PASSWORD", ""),
     )
     register_uuid(conn_or_curs=conn)
     register_vector(conn)

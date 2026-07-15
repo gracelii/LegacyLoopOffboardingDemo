@@ -1,11 +1,5 @@
 """
-Step 2: Structured knowledge extraction.
-
-Takes a document's raw text and asks an LLM to extract structured fields
-(project, technologies, dependencies, contacts, deployment process, etc.)
-as JSON. This runs once per document, on the full text (not per-chunk) --
-the categories we care about (deployment process, known issues) are usually
-spread across a whole doc, not contained in a single chunk.
+Step 2: Structured knowledge extraction via U-M GPT Toolkit.
 """
 import json
 import os
@@ -18,17 +12,28 @@ load_dotenv()
 _client = None
 
 
+def _get_config(key: str, default: str = "") -> str:
+    """Read from Streamlit secrets if available, else os.environ."""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
+
 def get_client() -> OpenAI:
     global _client
     if _client is None:
         _client = OpenAI(
-            api_key=os.environ["UMGPT_API_KEY"],
-            base_url=os.environ.get("UMGPT_API_BASE", "https://api.toolkit.umgpt.umich.edu/v1"),
+            api_key=_get_config("UMGPT_API_KEY"),
+            base_url=_get_config("UMGPT_API_BASE", "https://api.toolkit.umgpt.umich.edu/v1"),
         )
     return _client
 
 
-EXTRACTION_MODEL = "gpt-4o-mini"  # cheap, fast, confirmed chat-completions-capable in the UMGPT model matrix
+EXTRACTION_MODEL = "gpt-4o-mini"
 
 EXTRACTION_SYSTEM_PROMPT = """You are an IT knowledge transfer specialist reviewing internal \
 documentation as part of an employee offboarding process. Extract structured information from \
@@ -58,8 +63,7 @@ not verbatim copies.
 def extract_structured_knowledge(doc_title: str, raw_text: str) -> dict:
     """
     Returns a dict matching the schema above. Truncates very long documents
-    to stay within context -- for the MVP, the first ~12k chars is plenty
-    for catching project/tech/contact info, which tends to appear early.
+    to stay within context.
     """
     text_for_extraction = raw_text[:12000]
 
@@ -80,6 +84,4 @@ def extract_structured_knowledge(doc_title: str, raw_text: str) -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        # Shouldn't happen with response_format=json_object, but fail loud if it does
-        # rather than silently storing garbage.
         raise ValueError(f"Model did not return valid JSON for '{doc_title}': {content[:200]}")
