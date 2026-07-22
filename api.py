@@ -69,7 +69,7 @@ def upload(request: UploadRequest):
 
         if project and project != "(none detected)":
             print(f"Running gap analysis for {project}")
-            analyze_project(project)
+            analysis = analyze_project(project)
             print("Gap analysis complete")
         else:
             print("Skipping gap analysis: no project detected")
@@ -77,6 +77,9 @@ def upload(request: UploadRequest):
         return {
             "status": "ok",
             "stats": stats,
+            "project": project,
+            "gap_analysis": analysis["gap_result"],
+            "questions": analysis["questions"],
         }
 
     except Exception as e:
