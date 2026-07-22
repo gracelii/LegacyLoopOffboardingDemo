@@ -22,7 +22,13 @@ def _get_config(key: str, default: str = "") -> str:
             return st.secrets[key]
     except Exception:
         pass
-    return os.environ.get(key, default)
+    # Support both PG_* (our naming) and DB_* (Becky's naming) for compatibility
+    value = os.environ.get(key)
+    if value:
+        return value
+    # Fallback: try DB_* variant if PG_* not found
+    alt_key = key.replace("PG_", "DB_").replace("PG_DB", "DB_NAME")
+    return os.environ.get(alt_key, default)
 
 
 def get_connection():

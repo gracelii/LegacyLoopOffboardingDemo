@@ -22,19 +22,15 @@ from src.db_writer import (
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print('Usage: python run_gap_analysis.py "Project Name"')
-        sys.exit(1)
+def analyze_project(project):
+    if not project:
+        raise ValueError("Project name is required.")
 
-    project = sys.argv[1]
     conn = get_connection()
 
     docs = get_documents_for_project(conn, project)
     if not docs:
-        print(f"No documents found tagged with project '{project}'.")
-        print("Check that run_ingest.py has run and extracted a matching project name.")
-        sys.exit(1)
+        raise ValueError(f"No documents found for project '{project}'")
 
     print(f"Found {len(docs)} documents for project '{project}':")
     for d in docs:
@@ -74,10 +70,8 @@ def main():
     try:
         questions = generate_questions(project, gaps)
     except Exception as e:
-        print(f"\n⚠️  Question generation failed: {e}")
-        print("Gap analysis results were saved. Re-run this script to retry question generation.")
         conn.close()
-        sys.exit(1)
+        raise RuntimeError(f"Question generation failed: {e}")
 
     insert_interview_questions(conn, project, questions)
 
@@ -88,8 +82,20 @@ def main():
             print(f"    - {q}")
 
     conn.close()
-    print(f"\nDone. Run the Streamlit app to conduct the interview for '{project}'.")
+    if not gaps:
+        conn.close()
+        return {
+            "gap_result": gap_result,
+            "questions": {},
+        }
+
+    return {
+        "gap_result": gap_result,
+        "questions": questions,
+    }
+
+
 
 
 if __name__ == "__main__":
-    main()
+    analyze_project(sys.argv[1])
